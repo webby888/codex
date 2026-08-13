@@ -21,7 +21,6 @@ use windows_sys::Win32::Foundation::ERROR_NO_SUCH_LOGON_SESSION;
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SpawnObservation {
     codex_home: PathBuf,
-    cwd: PathBuf,
     username: String,
     password: String,
     logs_base_dir: Option<PathBuf>,
@@ -115,10 +114,9 @@ fn retry_uses_original_unified_exec_request_and_stops_after_second_failure() {
             password: "old".to_string(),
         },
         &request,
-        |codex_home, cwd, sandbox_creds, logs_base_dir, spawn_request| {
+        |codex_home, sandbox_creds, logs_base_dir, spawn_request| {
             spawn_observations.borrow_mut().push(SpawnObservation {
                 codex_home: codex_home.to_path_buf(),
-                cwd: cwd.to_path_buf(),
                 username: sandbox_creds.username.clone(),
                 password: sandbox_creds.password.clone(),
                 logs_base_dir: logs_base_dir.map(Path::to_path_buf),
@@ -172,7 +170,6 @@ fn retry_uses_original_unified_exec_request_and_stops_after_second_failure() {
         vec![
             SpawnObservation {
                 codex_home: request.codex_home.clone(),
-                cwd: request.cwd.clone(),
                 username: "stale".to_string(),
                 password: "old".to_string(),
                 logs_base_dir: request.logs_base_dir.clone(),
@@ -180,7 +177,6 @@ fn retry_uses_original_unified_exec_request_and_stops_after_second_failure() {
             },
             SpawnObservation {
                 codex_home: request.codex_home.clone(),
-                cwd: request.cwd.clone(),
                 username: "refreshed".to_string(),
                 password: "new".to_string(),
                 logs_base_dir: request.logs_base_dir,

@@ -3,6 +3,8 @@ use super::windows_common::make_runner_resizer;
 use super::windows_common::start_runner_pipe_writer;
 use super::windows_common::start_runner_stdin_writer;
 use super::windows_common::start_runner_stdout_reader;
+use crate::drive_mapping::ElevatedSandboxPathRequest;
+use crate::drive_mapping::resolve_elevated_sandbox_paths;
 use crate::identity::SandboxCreds;
 use crate::identity::refresh_logon_sandbox_creds;
 use crate::ipc_framed::EmptyPayload;
@@ -46,7 +48,7 @@ struct RunnerTransportRequest {
 fn spawn_runner_transport_with_retry<T>(
     sandbox_creds: SandboxCreds,
     request: &RunnerTransportRequest,
-    mut spawn: impl FnMut(&Path, &Path, &SandboxCreds, Option<&Path>, SpawnRequest) -> Result<T>,
+    mut spawn: impl FnMut(&Path, &SandboxCreds, Option<&Path>, SpawnRequest) -> Result<T>,
     refresh: impl FnOnce(
         &ResolvedWindowsSandboxPermissions,
         &Path,
@@ -67,7 +69,6 @@ fn spawn_runner_transport_with_retry<T>(
         |sandbox_creds| {
             spawn(
                 &request.codex_home,
-                &request.cwd,
                 &sandbox_creds,
                 request.logs_base_dir.as_deref(),
                 request.spawn_request.clone(),
@@ -114,7 +115,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     codex_home: &Path,
     command: Vec<String>,
     cwd: &Path,
-    mut env_map: HashMap<String, String>,
+    env_map: HashMap<String, String>,
     proxy_enforced: bool,
     network_proxy_restricting_sid: Option<String>,
     proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
@@ -136,20 +137,42 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         .iter()
         .map(AbsolutePathBuf::to_path_buf)
         .collect::<Vec<_>>();
+    let paths = resolve_elevated_sandbox_paths(ElevatedSandboxPathRequest {
+        permission_profile,
+        workspace_roots,
+        codex_home,
+        command,
+        cwd,
+        env_map,
+        read_roots_override,
+        write_roots_override,
+        deny_read_paths_override: &deny_read_paths_override,
+        deny_write_paths_override: &deny_write_paths_override,
+    })?;
+    let permission_profile = paths.permission_profile;
+    let workspace_roots = paths.workspace_roots;
+    let codex_home = paths.codex_home;
+    let command = paths.command;
+    let cwd = paths.cwd;
+    let mut env_map = paths.env_map;
+    let read_roots_override = paths.read_roots_override;
+    let write_roots_override = paths.write_roots_override;
+    let deny_read_paths_override = paths.deny_read_paths_override;
+    let deny_write_paths_override = paths.deny_write_paths_override;
     let permissions =
         ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
-            permission_profile,
-            workspace_roots,
+            &permission_profile,
+            &workspace_roots,
         )?;
     let elevated = prepare_elevated_spawn_context_for_permissions(
         permissions.clone(),
-        codex_home,
-        cwd,
+        &codex_home,
+        &cwd,
         &mut env_map,
         &command,
-        read_roots_override,
+        read_roots_override.as_deref(),
         read_roots_include_platform_defaults,
-        write_roots_override,
+        write_roots_override.as_deref(),
         &deny_read_paths_override,
         &deny_write_paths_override,
         proxy_enforced,
@@ -159,18 +182,18 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     let sandbox_creds = elevated.sandbox_creds;
     let request = RunnerTransportRequest {
         permissions,
-        codex_home: codex_home.to_path_buf(),
-        cwd: cwd.to_path_buf(),
+        codex_home: codex_home.clone(),
+        cwd: cwd.clone(),
         env_map: env_map.clone(),
         logs_base_dir: elevated.logs_base_dir,
         spawn_request: SpawnRequest {
             command,
-            cwd: cwd.to_path_buf(),
+            cwd,
             env: env_map,
-            permission_profile: permission_profile.clone(),
-            workspace_roots: workspace_roots.to_vec(),
+            permission_profile,
+            workspace_roots,
             codex_home: elevated.sandbox_base,
-            real_codex_home: codex_home.to_path_buf(),
+            real_codex_home: codex_home,
             cap_sids: elevated.cap_sids,
             network_proxy_restricting_sid,
             timeout_ms,
@@ -178,9 +201,9 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
             stdin_open,
             use_private_desktop,
         },
-        read_roots_override: read_roots_override.map(<[PathBuf]>::to_vec),
+        read_roots_override,
         read_roots_include_platform_defaults,
-        write_roots_override: write_roots_override.map(<[PathBuf]>::to_vec),
+        write_roots_override,
         deny_read_paths_override,
         deny_write_paths_override,
         proxy_enforced,

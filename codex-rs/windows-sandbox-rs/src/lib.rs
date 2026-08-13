@@ -63,6 +63,8 @@ mod desktop;
 #[cfg(target_os = "windows")]
 mod dpapi;
 #[cfg(target_os = "windows")]
+mod drive_mapping;
+#[cfg(target_os = "windows")]
 mod env;
 #[cfg(target_os = "windows")]
 mod helper_materialization;

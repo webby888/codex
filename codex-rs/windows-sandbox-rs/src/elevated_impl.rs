@@ -28,6 +28,8 @@ mod windows_impl {
     use crate::acl::allow_null_device;
     use crate::cap::load_or_create_cap_sids;
     use crate::cap::workspace_write_cap_sid_for_root;
+    use crate::drive_mapping::ElevatedSandboxPathRequest;
+    use crate::drive_mapping::resolve_elevated_sandbox_paths;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
@@ -106,7 +108,7 @@ mod windows_impl {
             codex_home,
             command,
             cwd,
-            mut env_map,
+            env_map,
             timeout_ms,
             cancellation,
             use_private_desktop,
@@ -118,11 +120,6 @@ mod windows_impl {
             deny_read_paths_override,
             deny_write_paths_override,
         } = request;
-        let permissions =
-            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
-                permission_profile,
-                workspace_roots,
-            )?;
         let deny_read_paths_override = deny_read_paths_override
             .iter()
             .map(AbsolutePathBuf::to_path_buf)
@@ -131,10 +128,37 @@ mod windows_impl {
             .iter()
             .map(AbsolutePathBuf::to_path_buf)
             .collect::<Vec<_>>();
+        let paths = resolve_elevated_sandbox_paths(ElevatedSandboxPathRequest {
+            permission_profile,
+            workspace_roots,
+            codex_home,
+            command,
+            cwd,
+            env_map,
+            read_roots_override,
+            write_roots_override,
+            deny_read_paths_override: &deny_read_paths_override,
+            deny_write_paths_override: &deny_write_paths_override,
+        })?;
+        let permission_profile = paths.permission_profile;
+        let workspace_roots = paths.workspace_roots;
+        let codex_home = paths.codex_home;
+        let command = paths.command;
+        let cwd = paths.cwd;
+        let mut env_map = paths.env_map;
+        let read_roots_override = paths.read_roots_override;
+        let write_roots_override = paths.write_roots_override;
+        let deny_read_paths_override = paths.deny_read_paths_override;
+        let deny_write_paths_override = paths.deny_write_paths_override;
+        let permissions =
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                &permission_profile,
+                &workspace_roots,
+            )?;
         normalize_null_device_env(&mut env_map);
         ensure_non_interactive_pager(&mut env_map);
         inherit_path_env(&mut env_map);
-        inject_git_safe_directory(&mut env_map, cwd);
+        inject_git_safe_directory(&mut env_map, &cwd);
         // Use a temp-based log dir that the sandbox user can write.
         let sandbox_base = codex_home.join(".sandbox");
         ensure_codex_home_exists(&sandbox_base)?;
@@ -143,40 +167,40 @@ mod windows_impl {
         log_start(&command, logs_base_dir);
         let sandbox_creds = require_logon_sandbox_creds(
             &permissions,
-            cwd,
+            &cwd,
             &env_map,
-            codex_home,
-            read_roots_override,
+            &codex_home,
+            read_roots_override.as_deref(),
             read_roots_include_platform_defaults,
-            write_roots_override,
+            write_roots_override.as_deref(),
             &deny_read_paths_override,
             &deny_write_paths_override,
             proxy_enforced,
             crate::WindowsSandboxProxySettingsMode::Reconcile,
         )?;
         // Build capability SID for ACL grants.
-        let caps = load_or_create_cap_sids(codex_home)?;
-        let (sid_for_null, cap_sids) = if permissions.uses_write_capabilities_for_cwd(cwd, &env_map)
-        {
-            let write_roots = effective_write_roots_for_permissions(
-                &permissions,
-                cwd,
-                &env_map,
-                codex_home,
-                write_roots_override,
-            );
-            let cap_sids = write_roots
-                .iter()
-                .map(|root| workspace_write_cap_sid_for_root(codex_home, cwd, root))
-                .collect::<Result<Vec<_>>>()?;
-            if cap_sids.is_empty() {
-                anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
-            }
-            (LocalSid::from_string(&cap_sids[0])?, cap_sids)
-        } else {
-            let sid = LocalSid::from_string(&caps.readonly)?;
-            (sid, vec![caps.readonly])
-        };
+        let caps = load_or_create_cap_sids(&codex_home)?;
+        let (sid_for_null, cap_sids) =
+            if permissions.uses_write_capabilities_for_cwd(&cwd, &env_map) {
+                let write_roots = effective_write_roots_for_permissions(
+                    &permissions,
+                    &cwd,
+                    &env_map,
+                    &codex_home,
+                    write_roots_override.as_deref(),
+                );
+                let cap_sids = write_roots
+                    .iter()
+                    .map(|root| workspace_write_cap_sid_for_root(&codex_home, &cwd, root))
+                    .collect::<Result<Vec<_>>>()?;
+                if cap_sids.is_empty() {
+                    anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
+                }
+                (LocalSid::from_string(&cap_sids[0])?, cap_sids)
+            } else {
+                let sid = LocalSid::from_string(&caps.readonly)?;
+                (sid, vec![caps.readonly])
+            };
 
         unsafe {
             allow_null_device(sid_for_null.as_ptr());
@@ -185,12 +209,12 @@ mod windows_impl {
         (|| -> Result<CaptureResult> {
             let spawn_request = SpawnRequest {
                 command: command.clone(),
-                cwd: cwd.to_path_buf(),
+                cwd: cwd.clone(),
                 env: env_map.clone(),
                 permission_profile: permission_profile.clone(),
-                workspace_roots: workspace_roots.to_vec(),
+                workspace_roots: workspace_roots.clone(),
                 codex_home: sandbox_base.clone(),
-                real_codex_home: codex_home.to_path_buf(),
+                real_codex_home: codex_home.clone(),
                 cap_sids,
                 network_proxy_restricting_sid,
                 timeout_ms,
@@ -203,8 +227,7 @@ mod windows_impl {
                 &spawn_request.command,
                 |sandbox_creds| {
                     spawn_runner_transport(
-                        codex_home,
-                        cwd,
+                        &codex_home,
                         &sandbox_creds,
                         logs_base_dir,
                         spawn_request.clone(),
@@ -213,12 +236,12 @@ mod windows_impl {
                 || {
                     refresh_logon_sandbox_creds(
                         &permissions,
-                        cwd,
+                        &cwd,
                         &env_map,
-                        codex_home,
-                        read_roots_override,
+                        &codex_home,
+                        read_roots_override.as_deref(),
                         read_roots_include_platform_defaults,
-                        write_roots_override,
+                        write_roots_override.as_deref(),
                         &deny_read_paths_override,
                         &deny_write_paths_override,
                         proxy_enforced,

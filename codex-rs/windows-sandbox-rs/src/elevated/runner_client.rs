@@ -1,3 +1,4 @@
+use crate::drive_mapping::resolve_path_for_elevated_sandbox;
 use crate::identity::SandboxCreds;
 use crate::ipc_framed::ErrorPayload;
 use crate::ipc_framed::ErrorStage;
@@ -309,18 +310,17 @@ fn connect_pipe_with_timeout(
 
 pub(crate) fn spawn_runner_transport(
     codex_home: &Path,
-    cwd: &Path,
     sandbox_creds: &SandboxCreds,
     log_dir: Option<&Path>,
     spawn_request: SpawnRequest,
 ) -> Result<RunnerTransport> {
+    let runner_exe = resolve_path_for_elevated_sandbox(&find_runner_exe(codex_home, log_dir))?;
     let (pipe_in_name, pipe_out_name) = pipe_pair();
     let h_pipe_in =
         create_named_pipe(&pipe_in_name, PIPE_ACCESS_OUTBOUND, &sandbox_creds.username)?;
     let h_pipe_out =
         create_named_pipe(&pipe_out_name, PIPE_ACCESS_INBOUND, &sandbox_creds.username)?;
 
-    let runner_exe = find_runner_exe(codex_home, log_dir);
     let runner_cmdline = runner_exe
         .to_str()
         .map(str::to_owned)
@@ -333,7 +333,8 @@ pub(crate) fn spawn_runner_transport(
     );
     let mut cmdline_vec = to_wide(&runner_full_cmd);
     let exe_w = to_wide(&runner_cmdline);
-    let cwd_w = to_wide(cwd);
+    let bootstrap_cwd = runner_bootstrap_cwd(&runner_exe, codex_home);
+    let bootstrap_cwd_w = to_wide(bootstrap_cwd);
     let user_w = to_wide(&sandbox_creds.username);
     let domain_w = to_wide(".");
     let password_w = to_wide(&sandbox_creds.password);
@@ -358,7 +359,7 @@ pub(crate) fn spawn_runner_transport(
                 .as_ref()
                 .map(|block| block.as_ptr() as *const c_void)
                 .unwrap_or(ptr::null()),
-            cwd_w.as_ptr(),
+            bootstrap_cwd_w.as_ptr(),
             &si,
             &mut pi,
         )
@@ -440,6 +441,13 @@ pub(crate) fn spawn_runner_transport(
     Ok(transport)
 }
 
+fn runner_bootstrap_cwd<'a>(runner_exe: &'a Path, codex_home: &'a Path) -> &'a Path {
+    runner_exe
+        .parent()
+        .filter(|parent| parent.is_absolute())
+        .unwrap_or(codex_home)
+}
+
 fn wait_for_complete_frame(pipe_read: &File, timeout: Duration) -> Result<()> {
     let handle = pipe_read.as_raw_handle() as HANDLE;
     let deadline = Instant::now() + timeout;
@@ -491,12 +499,24 @@ mod tests {
     use super::RunnerLogonError;
     use super::RunnerStartupError;
     use super::is_refreshable_sandbox_creds_error;
+    use super::runner_bootstrap_cwd;
     use crate::ipc_framed::ErrorPayload;
     use crate::ipc_framed::ErrorStage;
     use pretty_assertions::assert_eq;
     use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
     use windows_sys::Win32::Foundation::ERROR_NO_SUCH_LOGON_SESSION;
     use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
+
+    #[test]
+    fn runner_bootstrap_uses_materialized_runner_parent() {
+        let runner_exe = std::path::Path::new(r"C:\codex\.sandbox-bin\codex-command-runner.exe");
+        let codex_home = std::path::Path::new(r"J:\workspace\.codex");
+
+        assert_eq!(
+            runner_bootstrap_cwd(runner_exe, codex_home),
+            std::path::Path::new(r"C:\codex\.sandbox-bin")
+        );
+    }
 
     #[test]
     fn refreshable_sandbox_creds_error_recognizes_credential_and_child_start_failures() {
