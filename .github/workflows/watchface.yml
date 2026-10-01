@@ -1,0 +1,63 @@
+name: watchface
+
+# Builds the sideloadable Wear OS watch face in watchface/ and uploads the APK as a
+# workflow artifact. Only runs when the watch face changes (or on manual dispatch).
+on:
+  push:
+    paths:
+      - "watchface/**"
+      - ".github/workflows/watchface.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: watchface
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check generated XML is up to date
+        run: |
+          python3 generate.py
+          git diff --exit-code -- app/src/main/res/raw/watchface.xml
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Validate against the Watch Face Format v2 schema
+        env:
+          WFF_COMMIT: b6cdda0acd3e4c5d0be5624fcdc01209380029d1
+        run: |
+          git clone --quiet https://github.com/google/watchface.git "$RUNNER_TEMP/wff"
+          git -C "$RUNNER_TEMP/wff" checkout --quiet "$WFF_COMMIT"
+          v="$RUNNER_TEMP/wff/third_party/wff/specification/validator"
+          cp="$(ls "$v"/libs/*.jar | tr '\n' ':')"
+          mkdir -p "$v/out"
+          javac -nowarn -d "$v/out" -cp "$cp" $(find "$v/src" -name '*.java')
+          (cd "$v/../documents" && zip -qr "$v/out/docs.zip" .)
+          # The validator logs to stderr and exits 0 even on failure, so check its output.
+          java -cp "$v/out:$cp" com.samsung.watchface.DWFValidationApplication 2 \
+            app/src/main/res/raw/watchface.xml 2>&1 | tee "$RUNNER_TEMP/validate.log"
+          grep -q PASSED "$RUNNER_TEMP/validate.log"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Build APK
+        run: gradle --no-daemon assembleRelease
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: sunburst-navy-watchface-apk
+          path: watchface/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
