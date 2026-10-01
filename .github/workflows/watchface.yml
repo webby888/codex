@@ -44,8 +44,9 @@ jobs:
           mkdir -p "$v/out"
           javac -nowarn -d "$v/out" -cp "$cp" $(find "$v/src" -name '*.java')
           (cd "$v/../documents" && zip -qr "$v/out/docs.zip" .)
+          # The validator logs to stderr and exits 0 even on failure, so check its output.
           java -cp "$v/out:$cp" com.samsung.watchface.DWFValidationApplication 2 \
-            app/src/main/res/raw/watchface.xml | tee "$RUNNER_TEMP/validate.log"
+            app/src/main/res/raw/watchface.xml 2>&1 | tee "$RUNNER_TEMP/validate.log"
           grep -q PASSED "$RUNNER_TEMP/validate.log"
 
       - uses: gradle/actions/setup-gradle@v4
