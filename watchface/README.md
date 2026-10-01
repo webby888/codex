@@ -1,29 +1,41 @@
 # Sunburst Navy watch face
 
-A Wear OS watch face for the Samsung Galaxy Watch Ultra (or any round Wear OS 5+ watch),
-modelled on a blue-dial Kinetic 100M dress/sport watch. No brand wordmarks are reproduced.
+A Wear OS watch face for the Samsung Galaxy Watch Ultra (480x480, Wear OS 5+), recreating a
+blue-dial Kinetic 100M as closely as possible. No brand wordmarks are reproduced.
 
-![preview](app/src/main/res/drawable-nodpi/preview.png)
+| Active | Always-on |
+| --- | --- |
+| ![active](preview/preview.png) | ![always-on](preview/preview_ambient.png) |
 
-- Navy sunburst dial, polished faceted batons, inverted triangle at 12
-- Silver half-ring from 12 to 6, minute track, white date window at 3
-- Lumed baton hands; seconds hand ticks once per second
+- Radially brushed navy sunburst dial, lit from the upper left
+- Applied, faceted steel markers and 12 o'clock triangle with drop shadows
+- Silver half-ring from 12 to 6, printed minute track, recessed date window at 3
+- Pointed steel hands with framed lume; shadows fall consistently as the hands turn
+- Quartz-style ticking seconds hand with a slight overshoot
 - Two swappable readouts below centre (default: steps and heart rate)
-- Always-on mode: black dial, dimmed markers and readouts, no seconds hand
+- Always-on mode: black dial, outlined markers, dimmed hands, no seconds hand
 
-It is built with [Watch Face Format](https://developer.android.com/training/wearables/wff)
-v2 (XML, no code), which Samsung requires for third-party faces on Wear OS 5 and later.
+Built with [Watch Face Format](https://developer.android.com/training/wearables/wff) v2
+(resource-only, no code), the format Samsung requires for third-party faces on Wear OS 5+.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `generate.py` | Source of truth. Colours and geometry live here. |
-| `app/src/main/res/raw/watchface.xml` | Generated WFF definition. Do not hand-edit. |
-| `preview/preview.html` | Generated browser mock-up used to render `preview.png`. |
-| `app/` | Minimal resource-only Android app that packages the face. |
+| `face.py` | Shared geometry and palette (measured from photos of the original). |
+| `render_assets.py` | Renders the bitmaps: dial, always-on dial, hands, hand shadows, previews. |
+| `generate.py` | Writes `app/src/main/res/raw/watchface.xml`, which places and animates the bitmaps. |
+| `hand_layout.json` | Hand bitmap placement, written by `render_assets.py`, read by `generate.py`. |
+| `app/` | Minimal Android app that packages the face. |
 
-After editing `generate.py`, run `python3 generate.py`. CI fails if the generated files are stale.
+Workflow after changing artwork or geometry:
+
+```sh
+python3 render_assets.py   # needs numpy, Pillow, node + playwright (Chromium)
+python3 generate.py
+```
+
+The PNGs are committed, so CI only re-runs `generate.py` and fails if the XML is stale.
 
 ## Getting the APK
 
@@ -45,7 +57,7 @@ this folder in Android Studio.
      main Wireless debugging screen), then `adb install app-release.apk`.
    - From an Android phone: use an ADB sideloading app that supports wireless pairing.
 4. Long-press the current watch face, scroll to **Add watch face**, and pick **Sunburst Navy**.
-   Long-press it and tap **Customise** to change the two readouts.
+   Long-press it and tap **Customize** to change the two readouts.
 5. Turn ADB debugging off again when done.
 
 Menu names vary slightly between One UI Watch versions.

@@ -26,7 +26,7 @@ jobs:
       - name: Check generated XML is up to date
         run: |
           python3 generate.py
-          git diff --exit-code -- app/src/main/res/raw/watchface.xml preview/preview.html
+          git diff --exit-code -- app/src/main/res/raw/watchface.xml
 
       - uses: actions/setup-java@v4
         with:
